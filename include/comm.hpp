@@ -221,4 +221,174 @@ class free_list {
         size_t cur_size_ = 0;
 };
 
+/**
+ * @brief 管理对象大小的对齐、桶索引和批量移动规则
+ * @note thread cache通过该类把用户请求大小映射到固定规格的free list桶
+ */
+class size_class {
+      public:
+        /**
+         * @brief 按对象大小所在区间向上对齐
+         *
+         * @param size(size_t) 要计算的对象大小
+         * @return size_t 对齐后的大小，非法或溢出时返回0
+         */
+        inline static size_t round_up(size_t size) {
+                if (size == 0) {
+                        LOG(WARNING) << "size_class::round_up got zero size";
+                        return 0;
+                }
+
+                if (size <= 128) {
+                        return round_up_(size, 8);
+                } else if (size <= 1024) {
+                        return round_up_(size, 16);
+                } else if (size <= 8 * 1024) {
+                        return round_up_(size, 128);
+                } else if (size <= 64 * 1024) {
+                        return round_up_(size, 1024);
+                } else if (size <= 256 * 1024) {
+                        return round_up_(size, 8 * 1024);
+                } else {
+                        LOG(INFO) << "size_class::round_up handles large "
+                                     "allocation, size: "
+                                  << size;
+                        return round_up_(size, 1 << PAGE_SHIFT);
+                }
+        }
+
+        /**
+         * @brief 计算对象大小的桶索引
+         *
+         * @param bytes(size_t) 要计算的对象大小
+         * @return size_t 桶索引，非法大小返回BUCKETS_NUM作为无效索引
+         */
+        inline static size_t bucket_index(size_t bytes) {
+                if (bytes == 0 || bytes > MAX_BYTES) {
+                        LOG(WARNING)
+                            << "size_class::bucket_index got invalid bytes: "
+                            << bytes;
+                        return BUCKETS_NUM;
+                }
+
+                LOG(INFO) << "size_class::bucket_index request, bytes: "
+                          << bytes;
+
+                // 前4个区间分别拥有的桶数量，用于计算后续区间的偏移量。
+                static const size_t group_array[4] = {16, 56, 56, 56};
+                if (bytes <= 128) {
+                        return bucket_index_(bytes, 3);
+                } else if (bytes <= 1024) {
+                        return bucket_index_(bytes - 128, 4) + group_array[0];
+                } else if (bytes <= 8 * 1024) {
+                        return bucket_index_(bytes - 1024, 7) + group_array[1] +
+                               group_array[0];
+                } else if (bytes <= 64 * 1024) {
+                        return bucket_index_(bytes - 8 * 1024, 10) +
+                               group_array[2] + group_array[1] + group_array[0];
+                } else if (bytes <= 256 * 1024) {
+                        return bucket_index_(bytes - 64 * 1024, 13) +
+                               group_array[3] + group_array[2] +
+                               group_array[1] + group_array[0];
+                }
+
+                LOG(ERROR) << "size_class::bucket_index reached unreachable "
+                              "branch, bytes: "
+                           << bytes;
+                return BUCKETS_NUM;
+        }
+
+        /**
+         * @brief 计算一次threadCache从centralCache获取多少个页
+         *
+         * @param size(size_t) 要计算的对象大小
+         * @return size_t
+         * 一次threadCache从centralCache获取多少个页，非法大小返回0
+         */
+        inline static size_t num_move_page(size_t size) {
+                if (size == 0) {
+                        LOG(WARNING)
+                            << "size_class::num_move_page got zero size";
+                        return 0;
+                }
+
+                size_t num = num_move_size(size);
+                if (num == 0 ||
+                    size > std::numeric_limits<size_t>::max() / num) {
+                        LOG(ERROR)
+                            << "size_class::num_move_page overflow, size: "
+                            << size << ", num: " << num;
+                        return 0;
+                }
+
+                size_t npage = num * size;
+                npage >>= PAGE_SHIFT; // 相当于 /= 8kb
+                if (npage == 0)
+                        npage = 1;
+
+                LOG(INFO) << "size_class::num_move_page result, size: " << size
+                          << ", num: " << num << ", npage: " << npage;
+                return npage;
+        }
+
+        /**
+         * @brief 计算一次threadCache从centralCache获取多少个对象
+         *
+         * @param size(size_t) 要计算的对象大小
+         * @return size_t 一次批量移动对象个数，非法大小返回0
+         */
+        inline static size_t num_move_size(size_t size) {
+                if (size == 0) {
+                        LOG(WARNING)
+                            << "size_class::num_move_size got zero size";
+                        return 0;
+                }
+
+                // [2, 512]是一次批量移动对象数量的慢启动上限：
+                // 小对象一次批量上限高，大对象一次批量上限低。
+                size_t num = MAX_BYTES / size;
+                if (num < 2)
+                        num = 2;
+                if (num > 512)
+                        num = 512;
+
+                LOG(INFO) << "size_class::num_move_size result, size: " << size
+                          << ", num: " << num;
+                return num;
+        }
+
+      public:
+        /**
+         * @brief 向上取整
+         * @param size(size_t) 要取整的值
+         * @param align_size(size_t) 对齐大小
+         * @return size_t 取整后的值，非法或溢出时返回0
+         */
+        inline static size_t round_up_(size_t size, size_t align_size) {
+                if (align_size == 0 ||
+                    size >
+                        std::numeric_limits<size_t>::max() - align_size + 1) {
+                        LOG(ERROR)
+                            << "size_class::round_up_ invalid argument, size: "
+                            << size << ", align_size: " << align_size;
+                        return 0;
+                }
+
+                return (size + align_size - 1) & ~(align_size - 1);
+        }
+
+        /**
+         * @brief 计算对象大小的桶索引
+         *
+         * @param size(size_t) 要计算的对象大小
+         * @param align_shift(size_t) 对齐大小
+         * @return size_t 桶索引
+         */
+        inline static size_t bucket_index_(size_t size, size_t align_shift) {
+                CHECK_LT(align_shift, sizeof(size_t) * 8)
+                    << "invalid align_shift";
+                return ((size + (1 << align_shift) - 1) >> align_shift) - 1;
+        }
+};
+
 #endif // COMMON_HPP_

@@ -58,16 +58,15 @@ if(BUILD_TESTING)
     "${PROJECT_SOURCE_DIR}/tests/*.cc"
   )
 
-  foreach(test_source IN LISTS TCMALLOC_TEST_SOURCES)
-    get_filename_component(test_name "${test_source}" NAME_WE)
-    add_executable("${test_name}" "${test_source}")
-    target_link_libraries("${test_name}"
+  if(TCMALLOC_TEST_SOURCES)
+    add_executable(tests_main ${TCMALLOC_TEST_SOURCES})
+    target_link_libraries(tests_main
       PRIVATE
         tcmalloc
-        GTest::gtest_main
+        GTest::gtest
     )
-    gtest_discover_tests("${test_name}")
-  endforeach()
+    gtest_discover_tests(tests_main)
+  endif()
 endif()
 
 file(GLOB_RECURSE TCMALLOC_BENCHMARK_SOURCES CONFIGURE_DEPENDS
