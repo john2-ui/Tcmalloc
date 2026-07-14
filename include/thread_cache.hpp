@@ -49,5 +49,5 @@ class thread_cache {
         free_list free_lists_[BUCKETS_NUM];
 };
 
-static thread_local thread_cache *p_tls_thread_cache = nullptr;
+extern thread_local thread_cache *p_tls_thread_cache;
 #endif // THREAD_CACHE_HPP
