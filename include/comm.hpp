@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdlib>
 #include <limits>
+#include <mutex>
 #include <sys/mman.h>
 
 #include <glog/logging.h>
@@ -389,6 +390,198 @@ class size_class {
                     << "invalid align_shift";
                 return ((size + (1 << align_shift) - 1) >> align_shift) - 1;
         }
+};
+
+/**
+ * @brief 管理大块内存的类
+ * @note 用于管理从pageCache中获取的大块内存
+ */
+class span {
+      public:
+        /// @brief 大块内存起始页的页号
+        PAGE_ID page_id_ = 0;
+
+        /// @brief 大块内存包含的页数
+        size_t page_num_ = 0;
+
+        /// @brief 对象大小
+        size_t obj_size_ = 0;
+
+        /// @brief 被切成小段obj之后，计算被分配给thread cache的obj的数量
+        size_t use_count_ = 0;
+
+        /// @brief 切好的小块内存的自由链表
+        void *free_list_ = nullptr;
+
+        /// @brief 是否在被使用
+        bool is_use_ = false;
+
+        /// @brief 双向链表结构
+        span *next_ = nullptr;
+        span *prev_ = nullptr;
+};
+
+/**
+ * @brief 管理span的带头双向循环链表
+ * @note span_list只负责维护span之间的连接关系，不负责释放业务span对象
+ */
+class span_list {
+
+      public:
+        /**
+         * @brief 构造空的带头双向循环链表
+         */
+        span_list() {
+                head_ = new span();
+                head_->next_ = head_;
+                head_->prev_ = head_;
+                LOG(INFO) << "span_list initialized, head: " << head_;
+        }
+
+        /**
+         * @brief 析构链表头结点
+         * @note 链表中的业务span由调用方管理生命周期
+         */
+        ~span_list() {
+                LOG(INFO) << "span_list destroyed, head: " << head_;
+                delete head_;
+                head_ = nullptr;
+        }
+
+        span_list(const span_list &) = delete;
+        span_list &operator=(const span_list &) = delete;
+
+        /**
+         * @brief 在指定位置之前插入span
+         *
+         * @param pos(span*) 插入位置，new_span会插入到pos之前
+         * @param new_span(span*) 要插入的span
+         */
+        void insert(span *pos, span *new_span) {
+                if (pos == nullptr || new_span == nullptr) {
+                        LOG(WARNING)
+                            << "span_list::insert ignored invalid argument, "
+                               "pos: "
+                            << pos << ", new_span: " << new_span;
+                        return;
+                }
+
+                if (new_span == head_) {
+                        LOG(WARNING)
+                            << "span_list::insert ignored head as new_span";
+                        return;
+                }
+
+                LOG(INFO) << "span_list::insert before, pos: " << pos
+                          << ", new_span: " << new_span;
+                span *prev = pos->prev_;
+                if (prev == nullptr) {
+                        LOG(ERROR)
+                            << "span_list::insert found broken pos link, pos: "
+                            << pos;
+                        return;
+                }
+
+                prev->next_ = new_span;
+                new_span->prev_ = prev;
+                new_span->next_ = pos;
+                pos->prev_ = new_span;
+                LOG(INFO) << "span_list::insert after, new_span prev: "
+                          << new_span->prev_ << ", next: " << new_span->next_;
+        }
+
+        /**
+         * @brief 将指定span从链表中摘除
+         *
+         * @param pos(span*) 要摘除的span
+         */
+        void erase(span *pos) {
+                if (pos == nullptr) {
+                        LOG(WARNING) << "span_list::erase ignored nullptr";
+                        return;
+                }
+
+                if (pos == head_) {
+                        LOG(WARNING) << "span_list::erase ignored head";
+                        return;
+                }
+
+                span *prev = pos->prev_;
+                span *next = pos->next_;
+                if (prev == nullptr || next == nullptr) {
+                        LOG(ERROR)
+                            << "span_list::erase found broken link, pos: "
+                            << pos << ", prev: " << prev << ", next: " << next;
+                        return;
+                }
+
+                LOG(INFO) << "span_list::erase before, pos: " << pos;
+                prev->next_ = next;
+                next->prev_ = prev;
+                pos->prev_ = nullptr;
+                pos->next_ = nullptr;
+                LOG(INFO) << "span_list::erase after, pos detached: " << pos;
+        }
+
+        /**
+         * @brief 将span插入链表头部
+         *
+         * @param new_span(span*) 要插入的span
+         */
+        void push_front(span *new_span) {
+                LOG(INFO) << "span_list::push_front, span: " << new_span;
+                insert(begin(), new_span);
+        }
+
+        /**
+         * @brief 弹出链表头部第一个业务span
+         *
+         * @return span* 空链表返回nullptr，否则返回被摘除的span
+         */
+        span *pop_front() {
+                if (empty()) {
+                        LOG(WARNING) << "span_list::pop_front ignored empty";
+                        return nullptr;
+                }
+
+                span *front = head_->next_;
+                erase(front); // erase只是解除连接，没有删掉front
+                LOG(INFO) << "span_list::pop_front result, span: " << front;
+                return front;
+        }
+
+        /**
+         * @brief 判断链表是否为空
+         *
+         * @return true 链表为空
+         * @return false 链表非空
+         */
+        bool empty() const { return head_ == nullptr || head_->next_ == head_; }
+
+        /**
+         * @brief 获取第一个业务span
+         *
+         * @return span* 空链表返回end()
+         */
+        span *begin() { return head_ == nullptr ? nullptr : head_->next_; }
+
+        /**
+         * @brief 获取链表尾后位置，也就是头结点
+         *
+         * @return span* 头结点地址
+         */
+        span *end() { return head_; }
+
+      public:
+        /**
+         * @brief 桶锁
+         * @note 用于保护桶内的span链表
+         */
+        std::mutex bucket_mtx_;
+
+      private:
+        /// @brief 链表头
+        span *head_ = nullptr;
 };
 
 #endif // COMMON_HPP_
