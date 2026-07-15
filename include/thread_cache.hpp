@@ -5,6 +5,8 @@
 
 /**
  * @brief threadCache是线程本地缓存，每个线程有一个threadCache实例
+ * @note 小对象优先从线程本地free list分配，free list为空时再批量向central
+ * cache申请。
  */
 class thread_cache {
       public:
@@ -12,7 +14,7 @@ class thread_cache {
          * @brief 从threadCache中申请内存
          *
          * @param size(size_t) 要申请的内存大小
-         * @return void* 申请到的内存地址
+         * @return void* 申请到的内存地址，失败返回nullptr
          */
         void *allocate(size_t size);
 
@@ -30,12 +32,12 @@ class thread_cache {
          *
          * @param index(size_t) 桶索引
          * @param size(size_t) 要申请的单个内存块大小
-         * @return void* 申请到的内存地址
+         * @return void* 申请到的内存地址，失败返回nullptr
          */
         void *fetch_from_central_cache(size_t index, size_t size);
 
         /**
-         * @brief  释放对象
+         * @brief 将过长的thread cache自由链表归还一批对象给central cache
          * @note
          * 当链表长度大于一次批量申请的内存的时候，就开始还一段list给central
          * cache

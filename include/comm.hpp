@@ -217,7 +217,7 @@ class free_list {
          *
          * @return size_t 最大内存块数量
          */
-        size_t max_size() { return max_size_; }
+        size_t &max_size() { return max_size_; }
 
       private:
         /// @brief 链表头
