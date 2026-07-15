@@ -22,7 +22,7 @@
 
 static const size_t MAX_BYTES = 256 * 1024; // 256kb
 static const size_t BUCKETS_NUM = 208;      // 208 buckets
-static const size_t PAGES_NUM = 128;        // page cache设置128个桶
+static const size_t PAGES_NUM = 129;        // page cache设置128个桶
 static const size_t PAGE_SHIFT = 13;        // 页大小为8kb
 
 typedef unsigned long long PAGE_ID;

@@ -95,11 +95,11 @@ template <class T> class object_pool {
          * @note 对象池销毁前，仍存活对象应由调用方先通过delete_归还
          */
         ~object_pool() {
-                for (void *chunk : chunks_) {
+                for (const auto &chunk : chunks_) {
                         LOG(INFO)
                             << "object_pool::~object_pool free chunk, ptr: "
-                            << chunk << ", size: " << chunk_bytes_;
-                        system_free(chunk, chunk_bytes_);
+                            << chunk.first << ", size: " << chunk.second;
+                        system_free(chunk.first, chunk.second);
                 }
         }
 
@@ -124,9 +124,16 @@ template <class T> class object_pool {
          * @return false 申请失败
          */
         bool allocate_chunk_() {
-                size_t kpage = chunk_bytes_ >> PAGE_SHIFT;
+                size_t obj_size = object_size_();
+                // 需要考虑当Node很大时，根据Node大小申请内存
+                size_t request_bytes =
+                    obj_size > chunk_bytes_ ? obj_size : chunk_bytes_;
+                size_t page_bytes = size_t{1} << PAGE_SHIFT;
+                size_t kpage = (request_bytes + page_bytes - 1) >> PAGE_SHIFT;
+                size_t actual_bytes = kpage << PAGE_SHIFT;
                 LOG(INFO) << "object_pool::allocate_chunk_ request, kpage: "
-                          << kpage << ", chunk_bytes: " << chunk_bytes_;
+                          << kpage << ", chunk_bytes: " << actual_bytes
+                          << ", obj_size: " << obj_size;
 
                 char *chunk = static_cast<char *>(system_alloc(kpage));
                 if (chunk == nullptr) {
@@ -134,9 +141,9 @@ template <class T> class object_pool {
                         return false;
                 }
 
-                chunks_.push_back(chunk);
+                chunks_.push_back({chunk, actual_bytes});
                 memory_ = chunk;
-                remain_size_ = chunk_bytes_;
+                remain_size_ = actual_bytes;
                 return true;
         }
 
@@ -178,7 +185,7 @@ template <class T> class object_pool {
         void *free_list_ = nullptr;
 
         /// @brief 对象池持有的系统内存块，析构时统一归还
-        std::vector<void *> chunks_;
+        std::vector<std::pair<void *, size_t>> chunks_;
 
         /// @brief 每次向系统申请的内存块大小
         static constexpr size_t chunk_bytes_ = DEFAULT_KB * 1024;
