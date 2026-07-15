@@ -125,7 +125,7 @@ template <class T> class object_pool {
          */
         bool allocate_chunk_() {
                 size_t obj_size = object_size_();
-                // 需要考虑当Node很大时，根据Node大小申请内存
+                // 如果对象本身比默认 chunk 大，就按对象大小申请足够的页数
                 size_t request_bytes =
                     obj_size > chunk_bytes_ ? obj_size : chunk_bytes_;
                 size_t page_bytes = size_t{1} << PAGE_SHIFT;
