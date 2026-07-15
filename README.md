@@ -1,16 +1,5 @@
 # Tcmalloc
 
-这是一个使用 CMake 管理的 C++ 项目，目录结构如下：
-
-```text
-Tcmalloc/
-├── CMakeLists.txt
-├── include/
-├── src/
-├── tests/
-└── benchmark/
-```
-
 ## 环境要求
 
 - CMake 3.20 或更高版本
@@ -22,71 +11,49 @@ Tcmalloc/
 - glog
 - GoogleTest
 
-## 编译项目
+## 运行测试
 
-在项目根目录执行：
+配置并编译：
 
 ```bash
-cmake -S . -B build
+cmake -S . -B build -DBUILD_TESTING=ON
 cmake --build build
 ```
 
-如果需要重新生成构建目录，可以先删除旧的 `build/`：
-
-```bash
-rm -rf build
-cmake -S . -B build
-cmake --build build
-```
-
-## 运行单元测试
-
-默认开启测试构建。`tests/` 目录下的每个 `.cc` 文件都会生成一个同名测试可执行文件，并注册到 CTest。
-
-编译后执行：
+运行全部测试：
 
 ```bash
 ctest --test-dir build --output-on-failure
 ```
 
-也可以直接运行某个测试程序，例如当前的 `tests/tests_main.cc` 会生成：
+也可以直接运行测试可执行文件：
 
 ```bash
 ./build/tests_main
 ```
 
-如果只想编译项目，不构建测试：
-
-```bash
-cmake -S . -B build -DBUILD_TESTING=OFF
-cmake --build build
-```
-
 ## 运行 Benchmark
 
-`benchmark/` 目录下的每个 `.cc` 文件都会生成一个同名可执行文件。
-
-例如添加：
-
-```text
-benchmark/bench_mark.cc
-```
-
-编译后运行：
+编译后运行全部 benchmark 场景：
 
 ```bash
 ./build/bench_mark
 ```
 
-## 添加源码
-
-- 头文件放到 `include/`，建议使用 `.hpp`
-- 源文件放到 `src/`，使用 `.cc`
-- 单元测试放到 `tests/`，使用 `.cc`
-- 性能测试放到 `benchmark/`，使用 `.cc`
-
-CMake 使用 `CONFIGURE_DEPENDS` 自动收集源码。新增文件后，如果构建系统没有自动识别，可以重新执行：
+只测试 `malloc/free`：
 
 ```bash
-cmake -S . -B build
+./build/bench_mark --allocator=malloc --iterations=20000
+```
+
+只测试 `tcmalloc/tcfree`：
+
+```bash
+./build/bench_mark --allocator=tcmalloc --iterations=20000
+```
+
+输出格式为 CSV：
+
+```text
+scenario,allocator,operations,elapsed_ms,ops_per_sec,rss_before,rss_middle,rss_after
 ```
