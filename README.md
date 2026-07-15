@@ -40,6 +40,12 @@ ctest --test-dir build --output-on-failure
 ./build/bench_mark
 ```
 
+默认结果会保存到：
+
+```text
+benchmark/benchmark_result.csv
+```
+
 只测试 `malloc/free`：
 
 ```bash
@@ -50,6 +56,12 @@ ctest --test-dir build --output-on-failure
 
 ```bash
 ./build/bench_mark --allocator=tcmalloc --iterations=20000
+```
+
+自定义结果文件：
+
+```bash
+./build/bench_mark --output=benchmark/my_result.csv
 ```
 
 输出格式为 CSV：

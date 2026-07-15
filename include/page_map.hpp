@@ -49,13 +49,20 @@ template <int BITS> class TCMalloc_PageMap {
          */
         ~TCMalloc_PageMap() {
                 LOG(INFO) << "TCMalloc_PageMap destroyed, allocated nodes: "
-                          << allocated_nodes_.size();
+                          << allocated_nodes_.size()
+                          << ", allocated leaves: " << allocated_leaves_.size();
+                for (auto it = allocated_leaves_.rbegin();
+                     it != allocated_leaves_.rend(); ++it) {
+                        LeafPool().delete_(*it);
+                }
+
                 for (auto it = allocated_nodes_.rbegin();
                      it != allocated_nodes_.rend(); ++it) {
                         NodePool().delete_(*it);
                 }
 
                 root_ = nullptr;
+                allocated_leaves_.clear();
                 allocated_nodes_.clear();
         }
 
@@ -83,15 +90,14 @@ template <int BITS> class TCMalloc_PageMap {
                 const Number i1 = k >> (LEAF_BITS + INTERIOR_BITS);
                 const Number i2 = (k >> LEAF_BITS) & (INTERIOR_LENGTH - 1);
                 const Number i3 = k & (LEAF_LENGTH - 1);
-                if (root_->ptrs[i1] == nullptr ||
-                    root_->ptrs[i1]->ptrs[i2] == nullptr) {
+                Node *node = static_cast<Node *>(root_->ptrs[i1]);
+                if (node == nullptr || node->ptrs[i2] == nullptr) {
                         LOG(INFO) << "TCMalloc_PageMap::get miss, key: " << k;
                         return nullptr;
                 }
 
-                void *value =
-                    reinterpret_cast<Leaf *>(root_->ptrs[i1]->ptrs[i2])
-                        ->values[i3];
+                auto *leaf = static_cast<Leaf *>(node->ptrs[i2]);
+                void *value = leaf->values[i3];
                 LOG(INFO) << "TCMalloc_PageMap::get hit, key: " << k
                           << ", value: " << value;
                 return value;
@@ -120,16 +126,16 @@ template <int BITS> class TCMalloc_PageMap {
                 const Number i1 = k >> (LEAF_BITS + INTERIOR_BITS);
                 const Number i2 = (k >> LEAF_BITS) & (INTERIOR_LENGTH - 1);
                 const Number i3 = k & (LEAF_LENGTH - 1);
-                if (root_->ptrs[i1] == nullptr ||
-                    root_->ptrs[i1]->ptrs[i2] == nullptr) {
+                Node *node = static_cast<Node *>(root_->ptrs[i1]);
+                if (node == nullptr || node->ptrs[i2] == nullptr) {
                         LOG(WARNING) << "TCMalloc_PageMap::set missing node, "
                                         "call Ensure first, key: "
                                      << k;
                         return;
                 }
 
-                reinterpret_cast<Leaf *>(root_->ptrs[i1]->ptrs[i2])
-                    ->values[i3] = v;
+                auto *leaf = static_cast<Leaf *>(node->ptrs[i2]);
+                leaf->values[i3] = v;
                 LOG(INFO) << "TCMalloc_PageMap::set, key: " << k
                           << ", value: " << v;
         }
@@ -177,7 +183,8 @@ template <int BITS> class TCMalloc_PageMap {
                                 return false;
                         }
 
-                        if (root_->ptrs[i1] == nullptr) {
+                        Node *node = static_cast<Node *>(root_->ptrs[i1]);
+                        if (node == nullptr) {
                                 Node *node = NewNode();
                                 if (node == nullptr) {
                                         return false;
@@ -188,17 +195,18 @@ template <int BITS> class TCMalloc_PageMap {
                                           << i1 << ", node: " << node;
                         }
 
-                        if (root_->ptrs[i1]->ptrs[i2] == nullptr) {
-                                Node *node = NewNode();
-                                if (node == nullptr) {
+                        node = static_cast<Node *>(root_->ptrs[i1]);
+                        if (node->ptrs[i2] == nullptr) {
+                                Leaf *leaf = NewLeaf();
+                                if (leaf == nullptr) {
                                         return false;
                                 }
-                                root_->ptrs[i1]->ptrs[i2] = node;
+                                node->ptrs[i2] = leaf;
                                 LOG(INFO)
                                     << "TCMalloc_PageMap::Ensure created leaf "
                                        "node, i1: "
                                     << i1 << ", i2: " << i2
-                                    << ", node: " << node;
+                                    << ", leaf: " << leaf;
                         }
 
                         Number next_key = ((key >> LEAF_BITS) + 1) << LEAF_BITS;
@@ -227,7 +235,7 @@ template <int BITS> class TCMalloc_PageMap {
 
         /// @brief Interior node
         struct Node {
-                Node *ptrs[INTERIOR_LENGTH];
+                void *ptrs[INTERIOR_LENGTH];
         };
 
         /// @brief Leaf node
@@ -235,16 +243,14 @@ template <int BITS> class TCMalloc_PageMap {
                 void *values[LEAF_LENGTH];
         };
 
-        // 当前实现用NodePool统一申请节点存储，叶子层再按Leaf视图访问；
-        // 因此要求Node的空间至少能容纳Leaf。
-        static_assert(sizeof(Node) >= sizeof(Leaf),
-                      "Node storage must be large enough for Leaf");
-
         /// @brief Root node
         Node *root_ = nullptr;
 
         /// @brief 记录所有从对象池申请的节点，析构时统一归还
         std::vector<Node *> allocated_nodes_;
+
+        /// @brief 记录所有从对象池申请的叶子节点，析构时统一归还
+        std::vector<Leaf *> allocated_leaves_;
 
       private:
         /**
@@ -253,8 +259,21 @@ template <int BITS> class TCMalloc_PageMap {
          * @return object_pool<Node>& 节点对象池
          */
         static object_pool<Node> &NodePool() {
-                static object_pool<Node> node_pool;
-                return node_pool;
+                // PageMap常作为page cache单例的成员存在。进程退出时，函数内
+                // static对象的析构顺序不稳定；如果对象池先析构，PageMap再归还节点
+                // 会访问已释放chunk。这里让节点池常驻到进程结束，避免静态析构顺序问题。
+                static auto *node_pool = new object_pool<Node>();
+                return *node_pool;
+        }
+
+        /**
+         * @brief 获取用于分配叶子节点的对象池
+         *
+         * @return object_pool<Leaf>& 叶子节点对象池
+         */
+        static object_pool<Leaf> &LeafPool() {
+                static auto *leaf_pool = new object_pool<Leaf>();
+                return *leaf_pool;
         }
 
         /**
@@ -302,6 +321,23 @@ template <int BITS> class TCMalloc_PageMap {
                 memset(result, 0, sizeof(Node));
                 allocated_nodes_.push_back(result);
                 LOG(INFO) << "TCMalloc_PageMap::NewNode result: " << result;
+                return result;
+        }
+
+        /**
+         * @brief 从对象池申请并清零一个叶子节点
+         *
+         * @return Leaf* 成功返回叶子节点地址，失败返回nullptr
+         */
+        Leaf *NewLeaf() {
+                Leaf *result = LeafPool().new_();
+                if (result == nullptr) {
+                        LOG(ERROR) << "TCMalloc_PageMap::NewLeaf failed";
+                        return nullptr;
+                }
+                memset(result, 0, sizeof(Leaf));
+                allocated_leaves_.push_back(result);
+                LOG(INFO) << "TCMalloc_PageMap::NewLeaf result: " << result;
                 return result;
         }
 };
