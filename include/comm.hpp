@@ -1,3 +1,14 @@
+/**
+ * @file comm.hpp
+ * @author john2-ui (1463686156@qq.com)
+ * @brief 该文件用于定义一些常用的宏、类型和函数
+ * @version 0.1
+ * @date 2026-07-15
+ *
+ * @copyright Copyright (c) 2026
+ *
+ */
+
 #ifndef COMMON_HPP_
 #define COMMON_HPP_
 
