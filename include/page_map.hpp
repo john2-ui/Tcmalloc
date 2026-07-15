@@ -235,6 +235,8 @@ template <int BITS> class TCMalloc_PageMap {
                 void *values[LEAF_LENGTH];
         };
 
+        // 当前实现用NodePool统一申请节点存储，叶子层再按Leaf视图访问；
+        // 因此要求Node的空间至少能容纳Leaf。
         static_assert(sizeof(Node) >= sizeof(Leaf),
                       "Node storage must be large enough for Leaf");
 

@@ -26,7 +26,10 @@ class central_cache {
          *
          * @return central_cache& 全局central cache实例
          */
-        static central_cache &get_instance() { return s_instance_; }
+        static central_cache &get_instance() {
+                static central_cache instance;
+                return instance;
+        }
 
         /**
          * @brief 从central cache批量获取对象给thread cache
@@ -51,9 +54,6 @@ class central_cache {
       private:
         /// @brief 按对象大小桶管理的span链表
         span_list span_lists_[BUCKETS_NUM];
-
-        /// @brief central cache单例
-        static central_cache s_instance_;
 
         central_cache() = default;
         central_cache(const central_cache &) = delete;

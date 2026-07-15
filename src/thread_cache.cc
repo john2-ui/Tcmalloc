@@ -88,6 +88,8 @@ void *thread_cache::fetch_from_central_cache(size_t index, size_t size) {
                 return start;
         }
 
+        // start要立即返回给用户，不能重新挂回thread
+        // cache；只缓存start之后的对象。
         void *result = start;
         void *next = next_obj(start);
         next_obj(start) = nullptr;
@@ -164,6 +166,8 @@ void thread_cache::list_too_long(free_list &list, size_t size) {
                 return;
         }
 
+        // free_list::pop(range)只移动链表头，不会主动断开end->next；
+        // 归还给central cache前必须截断，避免把仍留在线程缓存里的对象一并归还。
         if (end != nullptr) {
                 next_obj(end) = nullptr;
         }

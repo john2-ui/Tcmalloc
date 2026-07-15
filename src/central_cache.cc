@@ -14,8 +14,6 @@
 #include <cstddef>
 #include <mutex>
 
-central_cache central_cache::s_instance_;
-
 size_t central_cache::fetch_range_obj(void *&start, void *&end,
                                       size_t batch_num, size_t size) {
         start = nullptr;
@@ -91,6 +89,8 @@ central_cache::get_non_empty_span(span_list &list, size_t size,
                 it = it->next_;
         }
 
+        // 进入page cache前释放当前size
+        // class的桶锁，避免同时持有central桶锁和page全局锁。
         bucket_lock.unlock();
 
         //没有空闲span，向os申请
@@ -126,7 +126,8 @@ central_cache::get_non_empty_span(span_list &list, size_t size,
         cur_span->is_use_ = true;
         cur_span->obj_size_ = size;
 
-        //切分span
+        // 将page cache返回的连续span切成固定size的小对象链表，供thread
+        // cache批量获取。
         char *addr_start = (char *)(cur_span->page_id_ << PAGE_SHIFT);
         size_t bytes = cur_span->page_num_ << PAGE_SHIFT;
         if (addr_start == nullptr || bytes < size) {
@@ -141,7 +142,7 @@ central_cache::get_non_empty_span(span_list &list, size_t size,
 
         char *addr_end = addr_start + bytes;
 
-        //切分span并使用链表连接
+        // 第一个对象作为链表头，后续对象通过对象头部的next指针串起来。
         cur_span->free_list_ = addr_start;
         addr_start += size;
         void *tail = cur_span->free_list_;
@@ -234,6 +235,8 @@ void central_cache::release_list_to_span(void *start, size_t byte_size) {
                         cur_span->next_ = nullptr;
                         cur_span->prev_ = nullptr;
 
+                        // 当前span已经从central桶中摘除，释放桶锁后再归还给page
+                        // cache做合并。
                         bucket_lock.unlock();
                         {
                                 std::unique_lock<std::mutex> page_lock(

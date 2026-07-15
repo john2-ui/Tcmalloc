@@ -20,10 +20,11 @@
 
 #include <glog/logging.h>
 
-static const size_t MAX_BYTES = 256 * 1024; // 256kb
-static const size_t BUCKETS_NUM = 208;      // 208 buckets
-static const size_t PAGES_NUM = 129;        // page cache设置128个桶
-static const size_t PAGE_SHIFT = 13;        // 页大小为8kb
+static const size_t MAX_BYTES = 256 * 1024; // 小对象路径的最大字节数
+static const size_t BUCKETS_NUM = 208;      // size class桶数量
+// page cache按页数管理空闲span，下标0不使用，1~128对应实际页数。
+static const size_t PAGES_NUM = 129;
+static const size_t PAGE_SHIFT = 13; // 页大小为8KB
 
 typedef unsigned long long PAGE_ID;
 #define SYS_BYTES 64
@@ -215,7 +216,7 @@ class free_list {
         /**
          * @brief 获取链表允许缓存的最大内存块数量
          *
-         * @return size_t 最大内存块数量
+         * @return size_t& 最大内存块数量引用，thread cache慢启动算法会调整该值
          */
         size_t &max_size() { return max_size_; }
 
@@ -446,7 +447,7 @@ class span_list {
                 head_ = new span();
                 head_->next_ = head_;
                 head_->prev_ = head_;
-                LOG(INFO) << "span_list initialized, head: " << head_;
+                VLOG(1) << "span_list initialized, head: " << head_;
         }
 
         /**
@@ -454,7 +455,7 @@ class span_list {
          * @note 链表中的业务span由调用方管理生命周期
          */
         ~span_list() {
-                LOG(INFO) << "span_list destroyed, head: " << head_;
+                VLOG(1) << "span_list destroyed, head: " << head_;
                 delete head_;
                 head_ = nullptr;
         }

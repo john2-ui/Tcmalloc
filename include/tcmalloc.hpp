@@ -19,6 +19,35 @@
 #include <mutex>
 
 /**
+ * @brief 获取当前线程的thread cache，首次使用时延迟创建
+ *
+ * @return thread_cache* 成功返回当前线程缓存，失败返回nullptr
+ */
+static thread_cache *get_tls_thread_cache() {
+        if (p_tls_thread_cache != nullptr) {
+                return p_tls_thread_cache;
+        }
+
+        // thread cache本身是线程局部的，但用于创建它的对象池是进程内共享的。
+        // 多线程首次分配时需要保护对象池，避免并发修改free list/chunk状态。
+        static object_pool<thread_cache> thread_cache_pool;
+        static std::mutex thread_cache_pool_mtx;
+        std::lock_guard<std::mutex> lock(thread_cache_pool_mtx);
+
+        if (p_tls_thread_cache == nullptr) {
+                p_tls_thread_cache = thread_cache_pool.new_();
+                if (p_tls_thread_cache == nullptr) {
+                        LOG(ERROR) << "failed to allocate thread cache";
+                        return nullptr;
+                }
+                LOG(INFO) << "initialized thread cache, ptr: "
+                          << p_tls_thread_cache;
+        }
+
+        return p_tls_thread_cache;
+}
+
+/**
  * @brief 申请指定大小的内存
  *
  * @param size 要申请的字节数
@@ -66,19 +95,12 @@ static void *tcmalloc(size_t size) {
                 return ptr;
         }
 
-        if (p_tls_thread_cache == nullptr) {
-                static object_pool<thread_cache> thread_cache_pool;
-                p_tls_thread_cache = thread_cache_pool.new_();
-                if (p_tls_thread_cache == nullptr) {
-                        LOG(ERROR)
-                            << "tcmalloc failed to allocate thread cache";
-                        return nullptr;
-                }
-                LOG(INFO) << "tcmalloc initialized thread cache, ptr: "
-                          << p_tls_thread_cache;
+        thread_cache *cache = get_tls_thread_cache();
+        if (cache == nullptr) {
+                return nullptr;
         }
 
-        void *ptr = p_tls_thread_cache->allocate(size);
+        void *ptr = cache->allocate(size);
         if (ptr == nullptr) {
                 LOG(ERROR) << "tcmalloc small allocation failed, size: "
                            << size;
@@ -123,19 +145,12 @@ static void tcfree(void *ptr) {
 
         page_lock.unlock();
 
-        if (p_tls_thread_cache == nullptr) {
-                static object_pool<thread_cache> thread_cache_pool;
-                p_tls_thread_cache = thread_cache_pool.new_();
-                if (p_tls_thread_cache == nullptr) {
-                        LOG(ERROR)
-                            << "tcfree failed to initialize thread cache";
-                        return;
-                }
-                LOG(INFO) << "tcfree initialized thread cache, ptr: "
-                          << p_tls_thread_cache;
+        thread_cache *cache = get_tls_thread_cache();
+        if (cache == nullptr) {
+                return;
         }
 
-        p_tls_thread_cache->deallocate(ptr, size);
+        cache->deallocate(ptr, size);
         LOG(INFO) << "tcfree released small allocation, ptr: " << ptr
                   << ", size: " << size;
 }

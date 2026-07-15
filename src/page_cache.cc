@@ -11,8 +11,6 @@
 
 #include "../include/page_cache.hpp"
 
-page_cache page_cache::s_instance_;
-
 span *page_cache::new_span(size_t k) {
         if (k == 0) {
                 LOG(ERROR) << "page_cache::new_span ignored zero pages";
@@ -21,7 +19,8 @@ span *page_cache::new_span(size_t k) {
 
         LOG(INFO) << "page_cache::new_span request, pages: " << k;
 
-        // 处理大内存情况
+        // 大于page
+        // cache常规桶范围的span不进入空闲桶，直接向系统申请并在释放时归还系统。
         if (k > PAGES_NUM - 1) {
                 void *ptr = system_alloc(k);
                 if (ptr == nullptr) {
@@ -76,8 +75,8 @@ span *page_cache::new_span(size_t k) {
                 }
 
                 s->is_use_ = true;
-                // 建立id和span的映射，方便central
-                // cache回收小内存时，查找对应的span
+                // 重新交给central
+                // cache使用前，恢复该span覆盖的每一页到span的映射。
                 if (!id_span_map_.Ensure(s->page_id_, s->page_num_)) {
                         LOG(ERROR)
                             << "page_cache::new_span Ensure failed for cached "
@@ -157,7 +156,7 @@ span *page_cache::new_span(size_t k) {
                 }
         }
 
-        // 所有的桶都是空的，则需要向系统申请一个128页的span
+        // 所有常规桶为空时，先补充一个最大规格span，再递归走上面的切分逻辑。
         void *ptr = system_alloc(PAGES_NUM - 1);
         if (ptr == nullptr) {
                 LOG(ERROR) << "page_cache::new_span system_alloc failed for "
@@ -261,7 +260,9 @@ void page_cache::release_span_to_page(span *s, size_t size) {
 
         s->is_use_ = false;
 
-        // 对span前后页尝试合并，缓解内存碎片问题
+        // 对span前后页尝试合并，缓解内存碎片问题。
+        // page
+        // cache只为可合并span保存首尾页映射，因此查找相邻span时只查边界页。
         while (s->page_id_ > 0) {
                 PAGE_ID prev_id = s->page_id_ - 1;
                 auto ret = (span *)id_span_map_.get(prev_id);

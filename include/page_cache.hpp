@@ -23,7 +23,10 @@ class page_cache {
          *
          * @return page_cache& 全局page cache实例
          */
-        static page_cache &get_instance() { return s_instance_; }
+        static page_cache &get_instance() {
+                static page_cache instance;
+                return instance;
+        }
 
         /**
          * @brief 申请包含k页的span
@@ -56,9 +59,6 @@ class page_cache {
       private:
         /// @brief 按页数管理空闲span的桶，下标表示span页数
         span_list span_lists_[PAGES_NUM];
-
-        /// @brief page cache单例
-        static page_cache s_instance_;
 
         /// @brief 页号到span的映射，用于根据对象地址反查span
         TCMalloc_PageMap<SYS_BYTES - PAGE_SHIFT> id_span_map_;

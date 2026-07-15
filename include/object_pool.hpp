@@ -119,6 +119,9 @@ template <class T> class object_pool {
 
         /**
          * @brief 向系统申请新的内存块
+         * @note
+         * 默认按128KB批量申请；如果单个T对象更大，则按对象大小向上按页申请，
+         * 避免对象池把大对象写出chunk边界。
          *
          * @return true 申请成功
          * @return false 申请失败
